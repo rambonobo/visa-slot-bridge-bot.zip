@@ -1,0 +1,30 @@
+[
+  {
+    "telegram": {
+      "chatUser": "H1BandH4UpdatesAlerts",
+      "topicId": 116
+    },
+    "whatsappGroupName": "H group"
+  },
+  {
+    "telegram": {
+      "chatUser": "F1visa_realtimeinfo",
+      "topicId": 18579
+    },
+    "whatsappGroupName": "F group"
+  },
+  {
+    "telegram": {
+      "chatUser": "VISAslotExpertB1B2",
+      "topicId": 3856
+    },
+    "whatsappGroupName": "B updates"
+  },
+  {
+    "telegram": {
+      "chatUser": "VISAslotExpertB1B2",
+      "topicId": 10039
+    },
+    "whatsappGroupName": "Canada to USA"
+  }
+]
