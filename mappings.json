@@ -1,0 +1,8 @@
+{
+  "mode": "broadcast_except_excluded",
+  "whatsapp_exclude_names": [
+    "Announcements",
+    "Discussion"
+  ],
+  "telegram_allowed_chats": []
+}
