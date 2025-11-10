@@ -1,0 +1,21 @@
+{
+  "name": "visa-bridge-railway-final",
+  "version": "1.0.0",
+  "description": "Telegram \u2192 WhatsApp one\u2011way bridge (pairs by phone code, fallback to QR). Ready for Railway.",
+  "type": "module",
+  "engines": {
+    "node": ">=20 <=22.999"
+  },
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js",
+    "dev": "node bridge.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "baileys": "^6.7.9",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
