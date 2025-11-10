@@ -1,0 +1,16 @@
+{
+  "name": "visa-bridge-railway-final-flat",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "baileys": "^6.7.9",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
