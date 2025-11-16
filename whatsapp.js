@@ -1,7 +1,7 @@
-
 const path = require("path");
 const fs = require("fs");
 const pino = require("pino");
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -13,6 +13,7 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 let sock = null;
 let groupsIndex = null;
 
+// Filters
 const EXCLUDE_NAMES = (process.env.EXCLUDE_GROUPS || "")
   .split(",")
   .map(s => s.trim())
@@ -29,8 +30,10 @@ async function ensureGroupsIndex() {
   if (groupsIndex) return groupsIndex;
 
   const all = await sock.groupFetchAllParticipating();
-  const list = Object.values(all || {})
-    .map(g => ({ id: g.id, name: g.subject || g.name || "" }));
+  const list = Object.values(all || {}).map(g => ({
+    id: g.id,
+    name: g.subject || g.name || ""
+  }));
 
   const filtered = list.filter(g => {
     if (EXCLUDE_NAMES.includes(g.name)) return false;
@@ -39,7 +42,11 @@ async function ensureGroupsIndex() {
   });
 
   groupsIndex = { all: list, filtered };
-  logger.info({ countAll: list.length, countFiltered: filtered.length }, "Indexed WhatsApp groups");
+  logger.info(
+    { countAll: list.length, countFiltered: filtered.length },
+    "Indexed WhatsApp groups"
+  );
+
   return groupsIndex;
 }
 
@@ -49,6 +56,7 @@ async function sendToAllEligible(text) {
     logger.warn("No eligible WA groups found to send to.");
     return;
   }
+
   for (const g of index.filtered) {
     try {
       await sock.sendMessage(g.id, { text });
@@ -64,35 +72,50 @@ async function startWhatsApp() {
   if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
   const { version, isLatest } = await fetchLatestBaileysVersion();
-  logger.info({ version, isLatest }, "Using Baileys WA web version");
+  logger.info({ version, isLatest }, "Using WhatsApp Web version negotiated by Baileys");
 
   sock = makeWASocket({
     version,
     logger,
     auth: state,
-    browser: ["Mac OS", "Desktop", "14.4.1"],
-    printQRInTerminal: false
+    browser: ["MacOS", "Safari", "14.4"],  // safer browser mode
+    printQRInTerminal: true               // 🔥 SHOW QR IN RAILWAY LOGS
   });
 
+  // Save creds on every update
   sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("connection.update", (u) => {
-    if (u.connection) logger.info({ connection: u.connection }, "[wa] connection");
-    if (u.qr) {
-      logger.warn("QR provided but not expected (creds should be preloaded).");
+
+  // Connection & QR handling
+  sock.ev.on("connection.update", (update) => {
+    const { qr, connection, lastDisconnect } = update;
+
+    // 🔥 PRINT QR TO TERMINAL (RAILWAY FRIENDLY)
+    if (qr) {
+      console.log("\n\n==================== SCAN THIS QR ====================\n");
+      console.log(qr);
+      console.log("\nScan from WhatsApp → Settings → Linked Devices\n");
+      console.log("=======================================================\n\n");
     }
-    if (u.lastDisconnect?.error) {
-      logger.error("connection errored");
+
+    if (connection === "open") {
+      logger.info("✅ WhatsApp connected successfully!");
     }
-    if (u.connection === "close") {
-      logger.error("WhatsApp connection closed");
+
+    if (connection === "close") {
+      logger.error("❌ WhatsApp connection closed");
+    }
+
+    if (lastDisconnect?.error) {
+      logger.error("⚠ WA lastDisconnect:", lastDisconnect.error?.message);
     }
   });
 
   try {
     await ensureGroupsIndex();
   } catch (e) {
-    logger.error(e, "Failed to warm up groups index");
+    logger.error(e, "Failed to build WhatsApp group index");
   }
 
   return { sendToAllEligible };
