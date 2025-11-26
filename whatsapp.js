@@ -12,10 +12,10 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 let sock = null;
 let groupsIndex = null;
 
-// 👉 store session on Railway volume
+// 👉 Store WhatsApp auth in Railway volume (mount at /data)
 const authDir = "/data/auth_whatsapp_v2";
 
-// Filters
+// 🔹 Filters for which WA groups receive messages
 const EXCLUDE_NAMES = (process.env.EXCLUDE_GROUPS || "")
   .split(",")
   .map((s) => s.trim())
@@ -31,6 +31,7 @@ const INCLUDE_REGEX = (() => {
   }
 })();
 
+// 🔹 Build / reuse cached group index
 async function ensureGroupsIndex() {
   if (!sock) throw new Error("WhatsApp socket not ready");
   if (groupsIndex) return groupsIndex;
@@ -56,6 +57,7 @@ async function ensureGroupsIndex() {
   return groupsIndex;
 }
 
+// 🔹 API used by bridge.js → send to all eligible WA groups
 async function sendToAllEligible(text) {
   const index = await ensureGroupsIndex();
   if (!index.filtered.length) {
@@ -73,8 +75,9 @@ async function sendToAllEligible(text) {
   }
 }
 
+// 🔹 Main WhatsApp starter
 async function startWhatsApp() {
-  // make sure auth directory exists (on Railway this is a volume)
+  // Ensure auth dir exists (inside Railway volume)
   if (!fs.existsSync(authDir)) {
     fs.mkdirSync(authDir, { recursive: true });
   }
@@ -89,16 +92,17 @@ async function startWhatsApp() {
     logger,
     auth: state,
     browser: ["MacOS", "Safari", "14.4"],
-    printQRInTerminal: true, // QR will appear in logs
+    printQRInTerminal: true, // QR string will print in Railway logs
   });
 
-  // Save credentials when updated
+  // Persist creds
   sock.ev.on("creds.update", saveCreds);
 
   // Connection lifecycle
   sock.ev.on("connection.update", (update) => {
     const { qr, connection, lastDisconnect } = update;
 
+    // 👉 Raw QR in logs so you can scan it from Railway
     if (qr) {
       console.log("\n\n==================== SCAN THIS QR ====================\n");
       console.log(qr);
@@ -113,7 +117,7 @@ async function startWhatsApp() {
 
     if (connection === "open") {
       logger.info("✅ WhatsApp connected successfully!");
-      groupsIndex = null; // rebuild groups
+      groupsIndex = null; // refresh group cache
     }
 
     if (connection === "close") {
@@ -135,11 +139,12 @@ async function startWhatsApp() {
           logger.error(e, "Failed to delete auth dir");
         }
 
-        // Let Railway restart → on next start you’ll get a fresh QR
+        // Let Railway restart → on next boot you'll get a fresh QR
         process.exit(1);
         return;
       }
 
+      // Other/transient error → try to reconnect
       logger.info("🔁 Transient error, trying to reconnect...");
       startWhatsApp().catch((e) =>
         logger.error(e, "Reconnection attempt failed")
@@ -147,7 +152,7 @@ async function startWhatsApp() {
     }
   });
 
-  // Try to index groups (will fail until after first connect, that's fine)
+  // Try to index groups (will fail until connected; that's fine)
   try {
     await ensureGroupsIndex();
   } catch (e) {
