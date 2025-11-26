@@ -1,7 +1,5 @@
-const path = require("path");
 const fs = require("fs");
 const pino = require("pino");
-
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -14,8 +12,8 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 let sock = null;
 let groupsIndex = null;
 
-// 👇 Where WhatsApp auth/session is stored (mount a Railway volume at /data)
-const authDir = "/data/auth_whatsapp";
+// 👉 store session on Railway volume
+const authDir = "/data/auth_whatsapp_v2";
 
 // Filters
 const EXCLUDE_NAMES = (process.env.EXCLUDE_GROUPS || "")
@@ -76,7 +74,7 @@ async function sendToAllEligible(text) {
 }
 
 async function startWhatsApp() {
-  // Ensure auth directory exists (on Railway this should be a volume at /data)
+  // make sure auth directory exists (on Railway this is a volume)
   if (!fs.existsSync(authDir)) {
     fs.mkdirSync(authDir, { recursive: true });
   }
@@ -91,17 +89,16 @@ async function startWhatsApp() {
     logger,
     auth: state,
     browser: ["MacOS", "Safari", "14.4"],
-    printQRInTerminal: true, // QR will appear in Railway logs
+    printQRInTerminal: true, // QR will appear in logs
   });
 
-  // Save creds whenever they’re updated
+  // Save credentials when updated
   sock.ev.on("creds.update", saveCreds);
 
   // Connection lifecycle
   sock.ev.on("connection.update", (update) => {
     const { qr, connection, lastDisconnect } = update;
 
-    // Show raw QR in logs so you can scan from Railway
     if (qr) {
       console.log("\n\n==================== SCAN THIS QR ====================\n");
       console.log(qr);
@@ -116,7 +113,7 @@ async function startWhatsApp() {
 
     if (connection === "open") {
       logger.info("✅ WhatsApp connected successfully!");
-      groupsIndex = null; // force fresh group index
+      groupsIndex = null; // rebuild groups
     }
 
     if (connection === "close") {
@@ -128,8 +125,9 @@ async function startWhatsApp() {
         statusCode === DisconnectReason.loggedOut;
 
       if (needFreshLogin) {
-        // Session is invalid – delete it so next boot shows a new QR
-        logger.error("🔐 Session invalid (405/401/loggedOut). Deleting auth_whatsapp and exiting.");
+        logger.error(
+          "🔐 Session invalid (405/401/loggedOut). Deleting auth_whatsapp_v2 and exiting."
+        );
 
         try {
           fs.rmSync(authDir, { recursive: true, force: true });
@@ -137,22 +135,23 @@ async function startWhatsApp() {
           logger.error(e, "Failed to delete auth dir");
         }
 
-        // Let Railway restart the container, new QR will be printed
+        // Let Railway restart → on next start you’ll get a fresh QR
         process.exit(1);
-      } else {
-        logger.info("🔁 Transient error, trying to reconnect...");
-        startWhatsApp().catch((e) =>
-          logger.error(e, "Reconnection attempt failed")
-        );
+        return;
       }
+
+      logger.info("🔁 Transient error, trying to reconnect...");
+      startWhatsApp().catch((e) =>
+        logger.error(e, "Reconnection attempt failed")
+      );
     }
   });
 
-  // Try to build initial group index (will be retried after connect if it fails)
+  // Try to index groups (will fail until after first connect, that's fine)
   try {
     await ensureGroupsIndex();
   } catch (e) {
-    logger.error(e, "Failed to build WhatsApp group index");
+    logger.error(e, "Failed to build WhatsApp group index (will retry later)");
   }
 
   return { sendToAllEligible };
