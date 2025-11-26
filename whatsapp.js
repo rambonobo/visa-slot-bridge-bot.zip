@@ -5,7 +5,8 @@ const pino = require("pino");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  DisconnectReason,
 } = require("@whiskeysockets/baileys");
 
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
@@ -13,16 +14,23 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 let sock = null;
 let groupsIndex = null;
 
+// 👇 Where WhatsApp auth/session is stored (mount a Railway volume at /data)
+const authDir = "/data/auth_whatsapp";
+
 // Filters
 const EXCLUDE_NAMES = (process.env.EXCLUDE_GROUPS || "")
   .split(",")
-  .map(s => s.trim())
+  .map((s) => s.trim())
   .filter(Boolean);
 
 const INCLUDE_REGEX = (() => {
   const re = (process.env.WA_GROUP_ALLOW_REGEX || "").trim();
   if (!re) return null;
-  try { return new RegExp(re, "i"); } catch { return null; }
+  try {
+    return new RegExp(re, "i");
+  } catch {
+    return null;
+  }
 })();
 
 async function ensureGroupsIndex() {
@@ -30,12 +38,12 @@ async function ensureGroupsIndex() {
   if (groupsIndex) return groupsIndex;
 
   const all = await sock.groupFetchAllParticipating();
-  const list = Object.values(all || {}).map(g => ({
+  const list = Object.values(all || {}).map((g) => ({
     id: g.id,
-    name: g.subject || g.name || ""
+    name: g.subject || g.name || "",
   }));
 
-  const filtered = list.filter(g => {
+  const filtered = list.filter((g) => {
     if (EXCLUDE_NAMES.includes(g.name)) return false;
     if (INCLUDE_REGEX && !INCLUDE_REGEX.test(g.name)) return false;
     return true;
@@ -68,8 +76,10 @@ async function sendToAllEligible(text) {
 }
 
 async function startWhatsApp() {
-  const authDir = path.join(process.cwd(), "auth_whatsapp");
-  if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+  // Ensure auth directory exists (on Railway this should be a volume at /data)
+  if (!fs.existsSync(authDir)) {
+    fs.mkdirSync(authDir, { recursive: true });
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
@@ -80,18 +90,18 @@ async function startWhatsApp() {
     version,
     logger,
     auth: state,
-    browser: ["MacOS", "Safari", "14.4"],  // safer browser mode
-    printQRInTerminal: true               // 🔥 SHOW QR IN RAILWAY LOGS
+    browser: ["MacOS", "Safari", "14.4"],
+    printQRInTerminal: true, // QR will appear in Railway logs
   });
 
-  // Save creds on every update
+  // Save creds whenever they’re updated
   sock.ev.on("creds.update", saveCreds);
 
-  // Connection & QR handling
+  // Connection lifecycle
   sock.ev.on("connection.update", (update) => {
     const { qr, connection, lastDisconnect } = update;
 
-    // 🔥 PRINT QR TO TERMINAL (RAILWAY FRIENDLY)
+    // Show raw QR in logs so you can scan from Railway
     if (qr) {
       console.log("\n\n==================== SCAN THIS QR ====================\n");
       console.log(qr);
@@ -99,19 +109,46 @@ async function startWhatsApp() {
       console.log("=======================================================\n\n");
     }
 
+    const statusCode = lastDisconnect?.error?.output?.statusCode;
+    const errMsg = lastDisconnect?.error?.message;
+
+    logger.info({ connection, statusCode, errMsg }, "connection.update");
+
     if (connection === "open") {
       logger.info("✅ WhatsApp connected successfully!");
+      groupsIndex = null; // force fresh group index
     }
 
     if (connection === "close") {
-      logger.error("❌ WhatsApp connection closed");
-    }
+      logger.error("❌ WhatsApp connection closed", { statusCode, errMsg });
 
-    if (lastDisconnect?.error) {
-      logger.error("⚠ WA lastDisconnect:", lastDisconnect.error?.message);
+      const needFreshLogin =
+        statusCode === 405 ||
+        statusCode === 401 ||
+        statusCode === DisconnectReason.loggedOut;
+
+      if (needFreshLogin) {
+        // Session is invalid – delete it so next boot shows a new QR
+        logger.error("🔐 Session invalid (405/401/loggedOut). Deleting auth_whatsapp and exiting.");
+
+        try {
+          fs.rmSync(authDir, { recursive: true, force: true });
+        } catch (e) {
+          logger.error(e, "Failed to delete auth dir");
+        }
+
+        // Let Railway restart the container, new QR will be printed
+        process.exit(1);
+      } else {
+        logger.info("🔁 Transient error, trying to reconnect...");
+        startWhatsApp().catch((e) =>
+          logger.error(e, "Reconnection attempt failed")
+        );
+      }
     }
   });
 
+  // Try to build initial group index (will be retried after connect if it fails)
   try {
     await ensureGroupsIndex();
   } catch (e) {
